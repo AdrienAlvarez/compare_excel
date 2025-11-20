@@ -9,6 +9,7 @@
 
   <h1>Comparer deux fichiers contacts</h1>
   <p>
+    Nouveaux = présents dans le <strong>nouveau fichier</strong> mais pas dans l'<strong>ancien</strong>. <br>
     Colonne utilisée : <code>E-mail 1 - Value</code>
   </p>
 
@@ -32,36 +33,44 @@
 
   <p id="status" style="margin-top: 20px; font-weight: bold;"></p>
 
-  <!-- Lib pour lire les fichiers Excel dans le navigateur -->
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
   <script>
+
     function readFileToJson(file, callback) {
       const reader = new FileReader();
+
       reader.onload = function(e) {
-        const data = new Uint8Array(e.target.result);
-        const workbook = XLSX.read(data, { type: "array" });
+        const data = e.target.result;
 
-        // On prend la première feuille
-        const firstSheetName = workbook.SheetNames[0];
-        const sheet = workbook.Sheets[firstSheetName];
+        // CSV → on gère séparateur ; ou ,
+        if (file.name.endsWith(".csv")) {
+          const text = new TextDecoder().decode(data);
+          const separator = text.includes(";") ? ";" : ",";
+          const workbook = XLSX.read(text, { type: "string" });
+          const firstSheet = workbook.SheetNames[0];
+          const sheet = workbook.Sheets[firstSheet];
+          const json = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+          callback(json);
+          return;
+        }
 
-        // Convertit en tableau d'objets { "Nom de colonne": valeur }
+        // Excel
+        const workbook = XLSX.read(new Uint8Array(data), { type: "array" });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
         const json = XLSX.utils.sheet_to_json(sheet, { defval: "" });
         callback(json);
       };
+
       reader.readAsArrayBuffer(file);
     }
 
-    function cleanEmail(value) {
-      return String(value || "").trim().toLowerCase();
+    function cleanEmail(v) {
+      return String(v || "").trim().toLowerCase();
     }
 
     function generateCsv(rows) {
-      if (rows.length === 0) {
-        return "";
-      }
-      const colonnes = [
+      const cols = [
         "Last Name",
         "First Name",
         "E-mail 1 - Value",
@@ -71,72 +80,60 @@
         "Notes"
       ];
 
-      const header = colonnes.join(",");
-      const lignes = rows.map(row => {
-        return colonnes.map(col => {
-          const val = row[col] !== undefined ? String(row[col]) : "";
-          // Échappement CSV simple
-          const safe = val.replace(/"/g, '""');
-          return `"${safe}"`;
-        }).join(",");
-      });
+      const header = cols.join(",");
+      const lignes = rows.map(r =>
+        cols.map(c => `"${String(r[c] || "").replace(/"/g, '""')}"`).join(",")
+      );
 
       return [header].concat(lignes).join("\r\n");
     }
 
     document.getElementById("runBtn").addEventListener("click", () => {
       const status = document.getElementById("status");
-      status.textContent = "";
 
-      const oldFileInput = document.getElementById("oldFile");
-      const newFileInput = document.getElementById("newFile");
+      const oldFile = document.getElementById("oldFile").files[0];
+      const newFile = document.getElementById("newFile").files[0];
 
-      if (!oldFileInput.files[0] || !newFileInput.files[0]) {
+      if (!oldFile || !newFile) {
         status.textContent = "Veuillez sélectionner les deux fichiers.";
         return;
       }
 
-      const oldFile = oldFileInput.files[0];
-      const newFile = newFileInput.files[0];
-
       status.textContent = "Lecture des fichiers...";
 
-      // Lire d’abord l’ancien, puis le nouveau
       readFileToJson(oldFile, oldRows => {
         readFileToJson(newFile, newRows => {
-          status.textContent = "Comparaison des emails...";
 
-          const newEmailsSet = new Set(
-            newRows.map(r => cleanEmail(r["E-mail 1 - Value"]))
+          status.textContent = "Comparaison...";
+
+          const oldEmails = new Set(
+            oldRows.map(r => cleanEmail(r["E-mail 1 - Value"]))
           );
 
-          const nouveauxUtilisateurs = oldRows.filter(r => {
+          // 👉 CORRECTION : on garde NEW - OLD
+          const nouveaux = newRows.filter(r => {
             const email = cleanEmail(r["E-mail 1 - Value"]);
-            return email && !newEmailsSet.has(email);
+            return email && !oldEmails.has(email);
           });
 
-          status.textContent = `${nouveauxUtilisateurs.length} nouveaux utilisateurs trouvés.`;
+          status.textContent = `${nouveaux.length} nouveaux utilisateurs trouvés.`;
 
-          const csvContent = generateCsv(nouveauxUtilisateurs);
-          if (!csvContent) {
-            status.textContent += " Aucun CSV généré (0 résultat).";
-            return;
-          }
+          const csv = generateCsv(nouveaux);
+          if (!csv) return;
 
-          // Création du fichier à télécharger
-          const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+          const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
           const url = URL.createObjectURL(blob);
 
           const a = document.createElement("a");
           a.href = url;
           a.download = "nouveaux_utilisateurs.csv";
-          document.body.appendChild(a);
           a.click();
-          document.body.removeChild(a);
+
           URL.revokeObjectURL(url);
         });
       });
     });
   </script>
+
 </body>
 </html>
